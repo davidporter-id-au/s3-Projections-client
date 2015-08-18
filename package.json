@@ -1,0 +1,20 @@
+{
+  "name": "node-hipsterbatch-client",
+  "version": "1.0.0",
+  "description": "A client for the hipster-batch system",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "mocha "
+  },
+  "author": "David Porter",
+  "license": "ISC",
+  "dependencies": {
+    "aws-sdk": "^2.1.39"
+  },
+  "devDependencies": {
+    "chai": "^3.1.0"
+  }
+}
