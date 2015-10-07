@@ -22,10 +22,10 @@ describe.only('Stream: Given successful bootstrapping', function(){
     });
 
     it('should fetch a stream of changes', function(done){
-        this.timeout(20000);
-        stream.on('data', function(data){
-            console.log('stream data', data.toString());
-            expect(data).to.not.be.null;
+        stream.read(function(err, data){
+            expect(err).to.be.null;
+            console.log(data);
+            done();
         });
     });
 });

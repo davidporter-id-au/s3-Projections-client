@@ -7,67 +7,92 @@ var fetchFile = require('./lib/fetchFile');
 var poller = require('./lib/poller');
 var util = require('util');
 
-var eventReadStream = new Readable;
+function fetchNext(config, s3Config, feedFileString, file, linePointer, cb){
 
-eventReadStream._read = function(){ /* noop */ };
+    // Ensure there's a file available by fetching it if null
+    // and recursing this function with the retrieved data. 
+    if(!file){
+        console.log(feedFileString);
+        return fetchFile(config, s3Config, feedFileString, function(err, fileRetrieved){
+            if(err){
+                return cb(err);
+            }
+            fetchNext(config, s3Config, feedFileString, fileRetrieved, linePointer, cb);
+        });
+    }
+    
+    if(!util.isArray(file.items)){
+        cb({ err: "feed file .items is not an array", items: file.items });
+        return;
+    }
 
-/** 
- * Fetches the given feedfile and loops through the events until it reaches the end. 
- */
-function fetchFeed(config, s3Config, feedFile, line, cb){
-    fetchFeedFile(config, s3Config, feedFile, line, function(err, nextFeedFile){
-        if(err){
-            console.log('error', err);
-            cb(err);
+    // If the linepointer is past the end of the file, time to get the next file: 
+    if(linePointer > file.items.length){
+        //If there's a next file:
+        if(file.next.S3FileKey){
+            fetchNext(config, s3Config, file.next.S3FileKey, null, 0, cb);
+            return;
         }
-        else if(nextFeedFile) {
-            fetchFeed(config, s3Config, nextFeedFile, 0, cb);
+        //If there's no next file:
+        else{
+            cb(null); //Do nothing
+            return;
         }
-        else { //At the end of the event-stream
-            cb(null, feedFile, line);
-        }
-    });
+    }
+    else {
+        cb(null, file.items[linePointer], feedFileString, file, linePointer + 1);
+    }
 }
 
 /**
- * Reads a feedfile and returns an array of events that have occured from the given position onward
- */ 
-function fetchFeedFile (config, s3Config, feedFile, line, cb){
-    fetchFile(config, s3Config, feedFile, function(err, file){
-        console.log('here', feedFile, err)
-        if(err){
-            cb(err);
-            return;
-        }
-        if(!util.isArray(file.items)){
-            cb({ err: "feed file .items is not an array", items: file.items });
-            return;
-        }
-        for(var i = (line || 0); i < file.items.length; i++){
-            eventReadStream.push(JSON.stringify(file.items[i]));
-        }
-        if(file.next){
-            cb(null, file.next.S3FileKey);
-        }
-        else {
-            cb(null);
-        }
-    });
+ * A stateful object which represents a stream of changes. Calling the
+ * read method will provide the next object in the stream.
+ *
+ * Note, this is a non-standard and likely temporary interface, probably to change
+ * in the future once I have found a better generic interface to work with.
+ */
+function createPseudoReadStream(config, s3Config){
+
+    var pseudoReadStream = {};
+
+    //The current feedfile. Set initially to the first feed file bythe s3Config.
+    pseudoReadStream.feedFileString = s3Config.feeds[0].start;
+
+    //Pointers:
+    var filePointer = undefined;
+    pseudoReadStream.feedPointer = 0; //The current location in the feedfile. Set initially to 0.
+
+    pseudoReadStream.read = function(cb){
+        var ctx = this;
+        fetchNext(config, s3Config, this.feedFileString, filePointer, this.feedPointer,
+
+            function(err, data, latestFeedFileString, latestFeedFilePointer, latestLinePointer){
+                if(err){
+                    cb(err);
+                    return;
+                }
+
+                if(latestFeedFileString)
+                    this.feedFileString = latestFeedFileString;
+                if(latestFeedFilePointer)
+                    filePointer = latestFeedFilePointer;
+                if(latestLinePointer)
+                    this.feedPointer = latestLinePointer;
+
+                //package it all up nicely and push it off to the stream:
+                cb(null, {
+                    _meta: {
+                        currentFeedFile: this.feedFileString,
+                        currentLine: this.feedPointer
+                    },
+                    event: data
+                });
+            });
+    };
+    return pseudoReadStream;
 }
 
 
 module.exports = function(config, s3Config){
-
-    var feedFilePointer = s3Config.feeds[0].start;  //The current feedfile. Set initially to the first feed file bythe s3Config.
-    var feedPointer = 0; //The current location in the feedfile. Set initially to 0.
-
-        fetchFeed(config, s3Config, feedFilePointer, feedPointer, function(err, latestFeedFile, latestPointer){
-            if(err){
-                console.error(err);
-            }
-            feedFilePointer = latestFeedFile;
-            feedPointer = latestPointer;
-        });
-
-    return eventReadStream;
+    return createPseudoReadStream(config, s3Config);
 };
